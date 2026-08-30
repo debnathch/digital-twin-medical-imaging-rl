@@ -1,0 +1,42 @@
+# ── Python ────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# ── Virtual Environment ──────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── IDE / Editor ─────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── PyTorch checkpoints ─────────────────────────────
+*.pt
+*.pth
+*.ckpt
+
+# ── Experiment outputs (regenerated at runtime) ─────
+results/
+*.log
+
+# ── Jupyter ──────────────────────────────────────────
+.ipynb_checkpoints/
+
+# ── OS ───────────────────────────────────────────────
+.DS_Store
+.Spotlight-V100
+.Trashes

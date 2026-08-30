@@ -1,0 +1,69 @@
+# ============================================
+# Digital Twin-Driven RL for Medical Imaging
+# Workflow Optimization — Master Configuration
+# ============================================
+# SYNTHETIC / RESEARCH DATA ONLY
+
+experiment:
+  name: "thesis_experiment"
+  mode: "full"
+  seeds: [42, 123, 456, 789, 1024]
+  output_dir: "results"
+
+digital_twin:
+  max_steps_per_episode: 200
+
+scenarios:
+  training: ["normal", "peak", "high_urgent"]
+  test: ["low_compute", "low_radiologist", "high_latency"]
+
+training:
+  num_episodes: 500
+  eval_interval: 50
+  eval_episodes: 10
+  checkpoint_interval: 100
+
+ppo:
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.20
+  learning_rate: 0.0003
+  batch_size: 256
+  ppo_epochs: 10
+  entropy_coef: 0.01
+  value_coef: 0.5
+  max_grad_norm: 0.5
+  hidden_dim: 64
+
+rewards:
+  weights:
+    w1_sla: 0.25
+    w2_clinical: 0.15
+    w3_queue_delay: 0.15
+    w4_inference: 0.10
+    w5_report: 0.15
+    w6_resource: 0.10
+    w7_workload: 0.10
+  agent_alpha: 0.6
+  agent_beta: 0.4
+
+convergence:
+  window_size: 100
+  min_improvement: 0.005
+  patience: 5
+  reward_variance_threshold: 0.5
+  kl_stability_threshold: 0.05
+  min_episodes: 200
+
+acceptance:
+  global_reward_improvement: 0.05
+  tat_improvement: 0.05
+  sla_compliance_minimum: 0.0
+  critical_delay_maximum_ratio: 1.0
+  ci_must_not_contradict: true
+  min_seeds_consistent: 3
+  must_generalize: true
+
+statistics:
+  n_bootstrap: 10000
+  significance_level: 0.05

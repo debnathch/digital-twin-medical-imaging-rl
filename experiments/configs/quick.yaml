@@ -1,0 +1,56 @@
+# Quick experiment config for development/testing (~15-30 min)
+experiment:
+  name: "quick_test"
+  mode: "quick"
+  seeds: [42, 123]
+  output_dir: "results/quick"
+
+digital_twin:
+  max_steps_per_episode: 50
+
+scenarios:
+  training: ["normal"]
+  test: ["low_compute"]
+
+training:
+  num_episodes: 50
+  eval_interval: 25
+  eval_episodes: 3
+  checkpoint_interval: 50
+
+ppo:
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_epsilon: 0.20
+  learning_rate: 0.0003
+  batch_size: 64
+  ppo_epochs: 5
+  entropy_coef: 0.01
+  value_coef: 0.5
+  max_grad_norm: 0.5
+  hidden_dim: 64
+
+rewards:
+  weights:
+    w1_sla: 0.25
+    w2_clinical: 0.15
+    w3_queue_delay: 0.15
+    w4_inference: 0.10
+    w5_report: 0.15
+    w6_resource: 0.10
+    w7_workload: 0.10
+  agent_alpha: 0.6
+  agent_beta: 0.4
+
+convergence:
+  window_size: 20
+  min_improvement: 0.01
+  patience: 3
+  min_episodes: 30
+
+acceptance:
+  min_seeds_consistent: 1
+  must_generalize: false
+
+statistics:
+  n_bootstrap: 1000

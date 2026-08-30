@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "medical-imaging-rl"
+version = "1.0.0"
+description = "Digital Twin-Driven RL for Medical Imaging Workflow Optimization"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.0",
+    "numpy>=1.24",
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.23",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "scipy>=1.11",
+    "pandas>=2.0",
+    "plotly>=5.15",
+    "kaleido>=0.2",
+    "openpyxl>=3.1",
+    "jinja2>=3.1",
+    "structlog>=23.1",
+    "websockets>=11.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4", "pytest-cov>=4.1", "black>=23.7", "ruff>=0.0.280"]
+test = ["pytest>=7.4", "pytest-cov>=4.1"]
+
+[project.scripts]
+mirlw = "medical_imaging_rl.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.setuptools.packages.find]
+where = ["."]

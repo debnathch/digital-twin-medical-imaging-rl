@@ -1,0 +1,397 @@
+================================================================================
+  DATA GENERATION STRATEGY
+  Digital Twin–Driven RL for Medical Imaging Workflow Optimization
+================================================================================
+
+  ⚠️  ALL DATA IS SYNTHETIC — No real patient data is used or stored.
+  This document describes how the application generates workload data
+  to test the Digital Twin simulation and RL agents.
+
+================================================================================
+  TABLE OF CONTENTS
+================================================================================
+
+  1. Overview
+  2. Study Arrival Generation (Poisson Process)
+  3. Per-Study Attributes
+  4. SLA Deadlines
+  5. Scenario-Based Stress Testing (6 Scenarios)
+  6. Resource Configuration
+  7. Service Time Distributions
+  8. Reproducibility (Seeds & Determinism)
+  9. Fairness Guarantee — All Policies See the Same Data
+  10. What Data Is NOT Generated
+
+================================================================================
+  1. OVERVIEW
+================================================================================
+
+  The application generates three categories of synthetic data:
+
+  ┌──────────────────────────┬───────────────────────────────────────────────┐
+  │ Category                 │ Purpose                                     │
+  ├──────────────────────────┼───────────────────────────────────────────────┤
+  │ Study Arrivals           │ Patient imaging requests arriving over time  │
+  │ Resource Configuration   │ Scanners, radiologists, AI models, GPUs     │
+  │ Service Time Durations   │ Stochastic time for scan, AI, reporting     │
+  └──────────────────────────┴───────────────────────────────────────────────┘
+
+  None of this is hard-coded output. The RL agent must learn to make
+  scheduling decisions WITHIN this generated environment. All metrics
+  (throughput, SLA compliance, turnaround time) are EMERGENT from the
+  interaction between the policy and the simulation — not pre-determined.
+
+  Source files:
+    • simulator/events/event_sources.py   — Study arrival generation
+    • simulator/scenarios/scenario.py      — Scenario definitions
+    • simulator/state/study.py             — Study data model
+    • simulator/resources/resources.py     — Resource pool configuration
+    • simulator/digital_twin/environment.py — Digital Twin simulation
+
+
+================================================================================
+  2. STUDY ARRIVAL GENERATION (POISSON PROCESS)
+================================================================================
+
+  Studies arrive according to a Poisson process — the standard model for
+  random arrivals in queueing theory and hospital operations research.
+
+  Mathematical formulation:
+
+    Inter-arrival time ~ Exponential(1 / λ)
+
+    where λ = arrival_rate_per_hour / 60   (converted to per-minute)
+
+  In code (event_sources.py, line 50):
+
+    inter_arrival = rng.exponential(1.0 / arrival_rate_per_minute)
+
+  Why Poisson?
+    It models events occurring independently at a constant average rate —
+    exactly how patient arrivals behave in published hospital studies
+    (Wiler et al., 2012; Green, 2006).
+
+  Example output (Scenario A, seed=42, 24-hour simulation):
+
+    Total arrivals : 246 studies
+    Mean rate      : 10.2 studies/hour
+    Inter-arrival  : mean = 5.8 min, std = 5.8 min
+                     (matches the memoryless property of exponential dist.)
+
+
+================================================================================
+  3. PER-STUDY ATTRIBUTES
+================================================================================
+
+  Each generated study is stamped with 5 stochastic attributes drawn from
+  configurable probability distributions:
+
+  ┌──────────────┬──────────────────┬──────────────────────────────────────┐
+  │ Attribute    │ Distribution     │ Default Values (Scenario A)          │
+  ├──────────────┼──────────────────┼──────────────────────────────────────┤
+  │ Modality     │ Categorical(p)   │ CT 30%, MRI 20%, XR 35%, US 15%    │
+  │ Urgency      │ Categorical(p)   │ Critical 10%, Urgent 25%, Routine 65│
+  │ Body Region  │ Uniform          │ head, chest, abdomen, spine,        │
+  │              │                  │ extremity, pelvis                    │
+  │ Complexity   │ Uniform Integer  │ 1 to 5                              │
+  │ Study ID     │ UUID v4          │ Unique identifier per study          │
+  └──────────────┴──────────────────┴──────────────────────────────────────┘
+
+  Clinical rationale:
+    • X-Ray is the most common imaging modality (~35%)
+    • MRI is expensive and limited (~20%)
+    • ~65% of imaging is routine; ~10% is emergency
+    • Complexity drives scan duration and AI inference time
+
+  Actual distribution from a 24-hour simulation (Scenario A, seed=42):
+
+    Urgency:
+      CRITICAL :  23 studies ( 9.3%)
+      URGENT   :  65 studies (26.4%)
+      ROUTINE  : 158 studies (64.2%)
+
+    Modality:
+      CT       :  63 studies (25.6%)
+      MRI      :  61 studies (24.8%)
+      XR       :  87 studies (35.4%)
+      US       :  35 studies (14.2%)
+
+    Complexity:
+      min = 1, max = 5, mean = 2.9
+
+
+================================================================================
+  4. SLA DEADLINES
+================================================================================
+
+  Each study receives an SLA deadline computed at arrival time:
+
+    sla_deadline = arrival_time + SLA_hours × 60 minutes
+
+  ┌────────────┬──────────────┬───────────────────────────────────────────┐
+  │ Urgency    │ SLA Deadline │ Clinical Basis                           │
+  ├────────────┼──────────────┼───────────────────────────────────────────┤
+  │ CRITICAL   │ 1 hour       │ Emergency — stroke, trauma, acute event  │
+  │ URGENT     │ 4 hours      │ Same-day priority — cancer staging, etc. │
+  │ ROUTINE    │ 24 hours     │ Standard clinical workflow               │
+  └────────────┴──────────────┴───────────────────────────────────────────┘
+
+  If a study is not completed by its SLA deadline, the Digital Twin
+  fires an SLA_BREACH event and increments the breach counter. This
+  directly impacts the global reward signal:
+
+    R_G includes:  w1 × SLA_compliance_rate  (weight = 0.25)
+
+
+================================================================================
+  5. SCENARIO-BASED STRESS TESTING (6 SCENARIOS)
+================================================================================
+
+  The same generation code produces 6 distinct workload profiles by
+  varying the scenario parameters. This tests whether policies
+  generalise beyond their training conditions.
+
+  ┌───────┬──────────────────┬────────────┬──────────────────────────────┐
+  │ ID    │ Name             │ Arr. Rate  │ What Changes                 │
+  ├───────┼──────────────────┼────────────┼──────────────────────────────┤
+  │ A     │ Normal           │ 10/hr      │ Baseline — full resources    │
+  │ B     │ Peak             │ 20/hr      │ 2× arrival load              │
+  │ C     │ High Urgent      │ 10/hr      │ 40% critical, 35% urgent    │
+  │ D     │ Low Compute      │ 10/hr      │ 50% GPU capacity             │
+  │ E     │ Low Radiologist  │ 10/hr      │ 50% radiologist availability │
+  │ F     │ High Latency     │ 10/hr      │ 3× AI inference latency      │
+  └───────┴──────────────────┴────────────┴──────────────────────────────┘
+
+  Experiment design:
+
+    TRAINING scenarios : A (Normal), B (Peak), C (High Urgent)
+    TESTING  scenarios : D (Low Compute), E (Low Radiologist), F (High Latency)
+
+  The RL agent trains on A, B, C and is then evaluated on D, E, F
+  which it has NEVER seen during training. This tests generalisation.
+
+
+================================================================================
+  6. RESOURCE CONFIGURATION
+================================================================================
+
+  Resources are created deterministically from the scenario config.
+
+  6.1 Scanners (8 total in default configuration)
+
+    ┌──────────────┬───────┬──────────────────────────────────────┐
+    │ Modality     │ Count │ Rationale                            │
+    ├──────────────┼───────┼──────────────────────────────────────┤
+    │ CT           │ 2     │ Major imaging modality               │
+    │ MRI          │ 1     │ Expensive, limited availability      │
+    │ X-Ray        │ 3     │ High-volume, fast turnaround         │
+    │ Ultrasound   │ 2     │ Moderate volume                      │
+    └──────────────┴───────┴──────────────────────────────────────┘
+
+    Each scanner tracks: is_available, current_study_id,
+                         total_scan_time, total_scans
+
+  6.2 Radiologists (5 in default configuration)
+
+    All radiologists have 8-hour shifts (480 minutes).
+    Each tracks workload = total_report_time / shift_duration.
+    All can report on any modality (generalist radiologists).
+
+  6.3 AI Models (5 models)
+
+    ┌─────────────────────┬──────────┬──────┬────────┬─────────────┐
+    │ Model               │ Modality │ GPU  │ Memory │ Inference   │
+    ├─────────────────────┼──────────┼──────┼────────┼─────────────┤
+    │ CT Stroke Detection │ CT       │ 0.25 │ 4 GB   │ 5 min       │
+    │ CXR Triage          │ XR       │ 0.15 │ 2 GB   │ 2 min       │
+    │ MRI Brain Analysis  │ MRI      │ 0.35 │ 6 GB   │ 8 min       │
+    │ US Abdomen Screen   │ US       │ 0.20 │ 3 GB   │ 3 min       │
+    │ General Screening   │ All      │ 0.20 │ 3 GB   │ 4 min       │
+    └─────────────────────┴──────────┴──────┴────────┴─────────────┘
+
+    The General Screening model supports all modalities, acting as
+    a fallback when the specialised model is busy.
+
+  6.4 GPU Cluster
+
+    Total GPUs   : 4 (scaled by gpu_capacity_fraction per scenario)
+    Total Memory : 64 GB (scaled by gpu_capacity_fraction per scenario)
+
+    GPU allocation is tracked dynamically. If a model requires more
+    GPU/memory than currently available, the action is rejected.
+
+
+================================================================================
+  7. SERVICE TIME DISTRIBUTIONS
+================================================================================
+
+  Each study passes through 3 sequential phases, each with a
+  stochastic duration driven by modality and complexity:
+
+  ─────────────────────────────────────────────────────────────────
+
+  7.1 SCAN DURATION
+
+    Formula:
+      mean = lo + (hi - lo) × (complexity / 5)
+      duration ~ Normal(mean, 0.10 × mean)
+
+    ┌──────────────┬──────────────┬────────────────────────────────┐
+    │ Modality     │ Range (min)  │ Example (complexity=3)         │
+    ├──────────────┼──────────────┼────────────────────────────────┤
+    │ CT           │ 10 – 30      │ ~22 min ± 2.2 min             │
+    │ MRI          │ 30 – 90      │ ~66 min ± 6.6 min             │
+    │ X-Ray        │  5 – 15      │ ~11 min ± 1.1 min             │
+    │ Ultrasound   │ 15 – 45      │ ~33 min ± 3.3 min             │
+    └──────────────┴──────────────┴────────────────────────────────┘
+
+  ─────────────────────────────────────────────────────────────────
+
+  7.2 AI INFERENCE DURATION
+
+    Formula:
+      duration = base_inference_time × (1 + complexity × 0.2)
+                 × inference_latency_multiplier
+
+    The latency_multiplier is 1.0 for Scenarios A–E, and 3.0 for
+    Scenario F (High Latency), simulating degraded compute.
+
+  ─────────────────────────────────────────────────────────────────
+
+  7.3 RADIOLOGIST REPORTING DURATION
+
+    Formula:
+      mean = lo + (hi - lo) × (complexity / 5)
+      duration ~ Normal(mean, 0.15 × mean)
+
+    ┌──────────────┬──────────────┬────────────────────────────────┐
+    │ Modality     │ Range (min)  │ Example (complexity=3)         │
+    ├──────────────┼──────────────┼────────────────────────────────┤
+    │ CT           │ 15 – 40      │ ~30 min ± 4.5 min             │
+    │ MRI          │ 20 – 45      │ ~35 min ± 5.3 min             │
+    │ X-Ray        │  5 – 15      │ ~11 min ± 1.7 min             │
+    │ Ultrasound   │ 10 – 25      │ ~19 min ± 2.9 min             │
+    └──────────────┴──────────────┴────────────────────────────────┘
+
+
+================================================================================
+  8. REPRODUCIBILITY (SEEDS & DETERMINISM)
+================================================================================
+
+  8.1 Seeded Random Number Generators
+
+    Every source of randomness is controlled by a seeded NumPy generator:
+
+      self.rng = np.random.default_rng(seed)
+
+    Same seed = identical events, identical timings, identical conditions.
+
+  8.2 Multi-Seed Experimental Design
+
+    The experiment runs across 5 seeds to ensure results are robust:
+
+      Seeds: [42, 123, 456, 789, 1024]
+
+    Statistical tests are applied across seeds:
+      • Welch's t-test
+      • Mann-Whitney U test
+      • Bootstrap confidence intervals (n=10,000)
+      • Hedges' g effect size
+
+  8.3 Configuration-Driven
+
+    All parameters are externalised in YAML config files:
+      • config.yaml              — Full experiment
+      • experiments/configs/quick.yaml — Quick development test
+
+
+================================================================================
+  9. FAIRNESS GUARANTEE — ALL POLICIES SEE THE SAME DATA
+================================================================================
+
+  This is the critical scientific principle of the experiment:
+
+  For a given (seed, scenario) pair, ALL three policies receive the
+  EXACT same workload. The ONLY variable is the policy's decision.
+
+    ┌─────────────────────────────────────────────────────────────┐
+    │                     Seed = 42                               │
+    │                                                             │
+    │   MockEventSource generates 246 identical study arrivals    │
+    │                    ↓           ↓           ↓                │
+    │              ┌─────────┐ ┌─────────┐ ┌───────────┐         │
+    │              │  FIFO   │ │ Triage  │ │ PPO/HAPPO │         │
+    │              │ (first  │ │ (critical│ │ (neural   │         │
+    │              │  come,  │ │  first, │ │  network  │         │
+    │              │  first  │ │  then   │ │  decides  │         │
+    │              │  serve) │ │  FIFO)  │ │  actions) │         │
+    │              └────┬────┘ └────┬────┘ └─────┬─────┘         │
+    │                   ↓           ↓            ↓               │
+    │              Same Digital Twin Environment                  │
+    │              Same Resources, Same Events                    │
+    │              Same Service Time Distributions                │
+    │                   ↓           ↓            ↓               │
+    │              EMERGENT      EMERGENT     EMERGENT            │
+    │              RESULTS       RESULTS      RESULTS             │
+    └─────────────────────────────────────────────────────────────┘
+
+  What is identical across policies:
+    ✓ Arrival events (same Poisson stream)
+    ✓ Study attributes (modality, urgency, complexity)
+    ✓ Resource pool (same scanners, radiologists, GPUs)
+    ✓ Service time parameters (same RNG seed)
+    ✓ SLA deadlines
+
+  What differs:
+    ✗ Only the scheduling decision (which study, which scanner,
+      which radiologist, which AI model)
+
+
+================================================================================
+  10. WHAT DATA IS NOT GENERATED
+================================================================================
+
+  ┌──────────────────────────────┬─────────┬───────────────────────┐
+  │ Item                         │ Status  │ Reason                │
+  ├──────────────────────────────┼─────────┼───────────────────────┤
+  │ Real patient images (DICOM)  │ ✗ None  │ Ethics / privacy      │
+  │ Hospital EHR data            │ ✗ None  │ Not needed            │
+  │ Pre-computed results         │ ✗ None  │ All metrics emergent  │
+  │ Hard-coded PPO advantages    │ ✗ None  │ Explicitly forbidden  │
+  │ Real clinical outcomes       │ ✗ None  │ Synthetic only        │
+  └──────────────────────────────┴─────────┴───────────────────────┘
+
+
+================================================================================
+  SUMMARY
+================================================================================
+
+  The data generation strategy follows this flow:
+
+    ScenarioConfig
+        │
+        ▼
+    MockEventSource  ──→  Poisson arrivals with stochastic attributes
+        │
+        ▼
+    DigitalTwin.reset()  ──→  Schedules all events, creates resources
+        │
+        ▼
+    step(action) loop  ──→  Processes events, applies policy decisions,
+        │                    draws stochastic service times,
+        │                    tracks SLA breaches
+        ▼
+    MetricsCalculator  ──→  Computes TAT, SLA compliance, utilisation
+                             from emergent simulation outcomes
+
+  The strategy ensures the experiment is:
+
+    1. STATISTICALLY GROUNDED  — Poisson arrivals, Normal service times
+    2. REPRODUCIBLE            — Seeded RNG, deterministic for a given seed
+    3. FAIR                    — All policies receive identical workloads
+    4. CONFIGURABLE            — 6 scenarios test different stress conditions
+    5. HONEST                  — No pre-baked results; outcomes are emergent
+
+================================================================================
+  END OF DOCUMENT
+================================================================================
